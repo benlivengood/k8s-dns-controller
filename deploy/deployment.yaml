@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dns-controller
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: dns-controller
+    app.kubernetes.io/part-of: k8s-dns-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dns-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dns-controller
+    spec:
+      serviceAccountName: k8s-dns-controller
+      containers:
+        - name: controller
+          image: YOUR_REGISTRY/k8s-dns-controller:latest  # CHANGEME
+          command: ["/controller"]
+          env:
+            - name: HOSTED_ZONE_ID
+              value: "Z1234567890"  # CHANGEME
+            - name: RECORD_NAMES
+              value: "*.k8s.example.com,ingress.example.com"  # CHANGEME
+            - name: NAMESPACE
+              value: "kube-system"
+            - name: DNS_TTL
+              value: "60s"
+            - name: RECONCILE_INTERVAL
+              value: "30s"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop: ["ALL"]
+      # AWS credentials via IRSA (recommended), or mount a secret:
+      # volumes:
+      #   - name: aws-creds
+      #     secret:
+      #       secretName: dns-controller-aws

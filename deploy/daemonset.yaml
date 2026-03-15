@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ip-agent
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ip-agent
+    app.kubernetes.io/part-of: k8s-dns-controller
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ip-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ip-agent
+    spec:
+      serviceAccountName: k8s-dns-controller
+      # Use host network so the outbound IP matches the node's actual public IP.
+      # Without this, pod traffic may exit via a different interface/NAT.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists  # schedule on all nodes including control plane
+      containers:
+        - name: agent
+          image: YOUR_REGISTRY/k8s-dns-controller:latest  # CHANGEME
+          command: ["/agent"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NAMESPACE
+              value: "kube-system"
+            - name: CHECK_INTERVAL
+              value: "60s"
+            # Optional: prepend your self-hosted whoami service
+            # - name: EXTRA_IP_PROVIDERS
+            #   value: "https://whoami.internal.example.com/ip"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop: ["ALL"]
