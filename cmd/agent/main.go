@@ -32,7 +32,7 @@ func main() {
 		namespace = "kube-system"
 	}
 
-	interval := 60 * time.Second
+	interval := 5 * time.Minute
 	if v := os.Getenv("CHECK_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err == nil {
@@ -100,11 +100,6 @@ func main() {
 		select {
 		case <-ctx.Done():
 			logger.Info("shutting down")
-			rmCtx, rmCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := s.RemoveNode(rmCtx, nodeName); err != nil {
-				logger.Warn("failed to remove node entry on shutdown", "error", err)
-			}
-			rmCancel()
 			return
 		case <-time.After(sleep):
 			run(ctx, logger, s, providers, quorum, nodeName)

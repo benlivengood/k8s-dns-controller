@@ -74,40 +74,6 @@ func (s *Store) SetNodeIP(ctx context.Context, nodeName string, ip net.IP) error
 	return fmt.Errorf("updating configmap: conflict after %d retries", maxConflictRetries)
 }
 
-// RemoveNode removes a node's entry from the store.
-// It retries on conflict since other agents may be updating concurrently.
-func (s *Store) RemoveNode(ctx context.Context, nodeName string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for attempt := range maxConflictRetries {
-		cm, err := s.getOrCreate(ctx)
-		if err != nil {
-			return err
-		}
-
-		if _, ok := cm.Data[nodeName]; !ok {
-			return nil
-		}
-
-		delete(cm.Data, nodeName)
-
-		_, err = s.client.CoreV1().ConfigMaps(s.namespace).Update(ctx, cm, metav1.UpdateOptions{})
-		if err == nil {
-			return nil
-		}
-		if !apierrors.IsConflict(err) {
-			return fmt.Errorf("removing node from configmap: %w", err)
-		}
-
-		if err := backoff(ctx, attempt); err != nil {
-			return fmt.Errorf("removing node from configmap: %w", err)
-		}
-	}
-
-	return fmt.Errorf("removing node from configmap: conflict after %d retries", maxConflictRetries)
-}
-
 // GetAllIPs returns the current set of node→IP mappings.
 func (s *Store) GetAllIPs(ctx context.Context) (map[string]net.IP, error) {
 	cm, err := s.getOrCreate(ctx)

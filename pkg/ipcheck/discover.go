@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+// ipv4Client forces all connections over IPv4 so whoami services return
+// the node's public IPv4 address rather than an IPv6 address.
+var ipv4Client = &http.Client{
+	Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp4", addr)
+		},
+		ForceAttemptHTTP2: true,
+		MaxIdleConns:      4,
+		IdleConnTimeout:   30 * time.Second,
+		DisableKeepAlives: true,
+	},
+}
+
 // Provider represents a public IP discovery endpoint.
 type Provider struct {
 	Name string
@@ -91,7 +105,7 @@ func query(ctx context.Context, p Provider) (net.IP, error) {
 	}
 	req.Header.Set("User-Agent", "k8s-dns-controller/1.0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ipv4Client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", p.Name, err)
 	}

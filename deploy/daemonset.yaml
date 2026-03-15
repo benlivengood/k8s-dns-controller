@@ -34,7 +34,7 @@ spec:
             - name: NAMESPACE
               value: "kube-system"
             - name: CHECK_INTERVAL
-              value: "60s"
+              value: "5m"
             # Optional: prepend your self-hosted whoami service
             # - name: EXTRA_IP_PROVIDERS
             #   value: "https://whoami.internal.example.com/ip"

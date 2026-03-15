@@ -50,18 +50,20 @@ dynamic IPs where you want `*.k8s.example.com` to always resolve to your nodes.
 
 ## How it works
 
-1. **ip-agent** (DaemonSet, `hostNetwork: true`) runs on every node. Every 60s it
-   queries multiple public IP services (icanhazip, ifconfig.me, ipify, ipecho)
-   and requires a quorum of 2 to agree — guarding against a single service
-   returning garbage. It writes the result to a shared ConfigMap keyed by node
-   name.
+1. **ip-agent** (DaemonSet, `hostNetwork: true`) runs on every node. Every 5
+   minutes it queries multiple public IP services (icanhazip, ifconfig.me, ipify,
+   ipecho) over IPv4 and requires a quorum of 2 to agree — guarding against a
+   single service returning garbage. It writes the result to a shared ConfigMap
+   keyed by node name. Each agent's check interval is jittered ±25% to avoid
+   thundering-herd effects on the IP providers and the ConfigMap.
 
 2. **dns-controller** (Deployment, 1 replica) reads the ConfigMap every 30s,
    compares the IPs against the current Route53 A records, and applies an UPSERT
    if anything changed. It manages one or more record names (including wildcards).
 
-3. On shutdown, the agent removes its own entry from the ConfigMap so the
-   controller stops advertising the IP of a dead node.
+Stale entries in the ConfigMap (e.g. from decommissioned nodes) should be removed
+manually with `kubectl`. The agent intentionally does **not** remove its entry on
+shutdown to avoid DNS churn during rolling updates or brief restarts.
 
 ## Setup
 
@@ -74,18 +76,72 @@ docker build --target agent -t YOUR_REGISTRY/k8s-dns-controller-agent:latest .
 docker build --target controller -t YOUR_REGISTRY/k8s-dns-controller-controller:latest .
 ```
 
-### 2. Create IAM policy
+### 2. Configure AWS credentials
 
-Apply `deploy/iam-policy.json` and attach it to the controller's identity.
-With IRSA, annotate the ServiceAccount:
+The dns-controller needs Route53 access. The recommended approach is **IAM Roles
+for Service Accounts (IRSA)**, but any standard AWS credential method works.
+
+#### Option A: IRSA (recommended for EKS)
+
+1. Create an IAM policy from the included template:
+
+```bash
+aws iam create-policy \
+  --policy-name k8s-dns-controller \
+  --policy-document file://deploy/iam-policy.json
+```
+
+2. Create an IAM role with a trust policy that allows your cluster's OIDC
+   provider to assume it. Replace `ACCOUNT`, `REGION`, `OIDC_ID`, and
+   `NAMESPACE` with your values:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::ACCOUNT:oidc-provider/oidc.eks.REGION.amazonaws.com/id/OIDC_ID"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:NAMESPACE:k8s-dns-controller"
+        }
+      }
+    }
+  ]
+}
+```
+
+3. Attach the policy to the role:
+
+```bash
+aws iam attach-role-policy \
+  --role-name k8s-dns-controller \
+  --policy-arn arn:aws:iam::ACCOUNT:policy/k8s-dns-controller
+```
+
+4. Annotate the Kubernetes ServiceAccount so the AWS SDK picks up the role
+   automatically:
 
 ```bash
 kubectl -n kube-system annotate sa k8s-dns-controller \
   eks.amazonaws.com/role-arn=arn:aws:iam::ACCOUNT:role/k8s-dns-controller
 ```
 
-For non-EKS clusters, use any AWS credential method (env vars, instance profile,
-mounted secret).
+#### Option B: Instance profile
+
+If your nodes already have an instance profile with Route53 access (common in
+self-managed clusters), no extra configuration is needed — the AWS SDK will use
+it automatically.
+
+#### Option C: Static credentials (not recommended)
+
+Mount a Secret with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as env vars
+on the dns-controller Deployment. See the commented-out volume mount in
+`deploy/deployment.yaml`.
 
 ### 3. Deploy
 
@@ -121,7 +177,7 @@ dig +short '*.k8s.example.com'
 |----------------------|---------------|----------------------------------------------------|
 | `NODE_NAME`          | *required*    | Set via downward API (`spec.nodeName`)              |
 | `NAMESPACE`          | `kube-system` | Namespace of the shared ConfigMap                   |
-| `CHECK_INTERVAL`     | `60s`         | How often to recheck the public IP                  |
+| `CHECK_INTERVAL`     | `5m`          | How often to recheck the public IP (jittered ±25%) |
 | `EXTRA_IP_PROVIDERS` | (none)        | Comma-separated URLs prepended to the provider list |
 
 ### dns-controller (Deployment)
@@ -145,6 +201,10 @@ dig +short '*.k8s.example.com'
   node's actual network stack, not through kube-proxy or a CNI overlay, to get
   the correct public IP.
 
+- **IPv4 only**: The HTTP client forces `tcp4` connections so whoami services
+  always return the node's public IPv4 address. This avoids getting an IPv6
+  address that can't be used in an A record.
+
 - **Quorum on IP discovery**: Protects against a single whoami service returning
   a cached/wrong IP. The default quorum of 2 means at least 2 of 4 services must
   agree.
@@ -153,5 +213,7 @@ dig +short '*.k8s.example.com'
   crashed), the controller logs a warning and does nothing rather than removing
   all A records.
 
-- **Agent cleanup on shutdown**: Graceful termination removes the node's entry,
-  so the controller can stop advertising an IP that's no longer serving traffic.
+- **No cleanup on shutdown**: The agent does not remove its ConfigMap entry when
+  it stops. This avoids unnecessary DNS churn during rolling updates or brief
+  restarts. Stale entries from permanently removed nodes should be cleaned up
+  manually.
