@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"os/signal"
 	"strings"
@@ -39,15 +40,19 @@ func main() {
 		}
 	}
 
-	// Build provider list. Supports adding a self-hosted whoami endpoint.
 	providers := ipcheck.DefaultProviders
 	if extra := os.Getenv("EXTRA_IP_PROVIDERS"); extra != "" {
-		for _, url := range strings.Split(extra, ",") {
+		var custom []ipcheck.Provider
+		for i, url := range strings.Split(extra, ",") {
 			url = strings.TrimSpace(url)
 			if url != "" {
-				providers = append([]ipcheck.Provider{{Name: "self-hosted", URL: url}}, providers...)
+				custom = append(custom, ipcheck.Provider{
+					Name: fmt.Sprintf("custom-%d", i),
+					URL:  url,
+				})
 			}
 		}
+		providers = append(custom, providers...)
 	}
 
 	quorum := 2
@@ -76,24 +81,32 @@ func main() {
 		"providers", fmt.Sprintf("%d", len(providers)),
 	)
 
-	// Run immediately, then on a ticker.
+	// Stagger the first check so agents started simultaneously don't all
+	// hit the IP providers and ConfigMap at the same instant.
+	initialJitter := time.Duration(rand.Int64N(int64(interval / 2)))
+	logger.Info("waiting before first check", "jitter", initialJitter)
+	select {
+	case <-ctx.Done():
+	case <-time.After(initialJitter):
+	}
+
 	run(ctx, logger, s, providers, quorum, nodeName)
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
 	for {
+		// ±25% jitter around the configured interval to avoid thundering herd.
+		jitter := interval / 4
+		sleep := interval - jitter + time.Duration(rand.Int64N(int64(2*jitter)))
+
 		select {
 		case <-ctx.Done():
 			logger.Info("shutting down")
-			// Best-effort removal so stale IPs don't linger.
 			rmCtx, rmCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if err := s.RemoveNode(rmCtx, nodeName); err != nil {
 				logger.Warn("failed to remove node entry on shutdown", "error", err)
 			}
 			rmCancel()
 			return
-		case <-ticker.C:
+		case <-time.After(sleep):
 			run(ctx, logger, s, providers, quorum, nodeName)
 		}
 	}
