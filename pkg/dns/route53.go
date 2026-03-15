@@ -118,7 +118,9 @@ func (r *Reconciler) getCurrentIPs(ctx context.Context, fqdn string) ([]string, 
 	}
 
 	for _, rrs := range out.ResourceRecordSets {
-		if aws.ToString(rrs.Name) == fqdn && rrs.Type == r53types.RRTypeA {
+		// Route53 returns wildcards as \052 (octal for *) in its API responses.
+		name := strings.ReplaceAll(aws.ToString(rrs.Name), `\052`, "*")
+		if name == fqdn && rrs.Type == r53types.RRTypeA {
 			var ips []string
 			for _, rr := range rrs.ResourceRecords {
 				ips = append(ips, aws.ToString(rr.Value))
