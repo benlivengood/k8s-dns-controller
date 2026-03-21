@@ -23,9 +23,9 @@ dynamic IPs where you want `*.k8s.example.com` to always resolve to your nodes.
 │           │  ConfigMap             │                      │
 │           │  node-public-ips       │                      │
 │           │                       │                      │
-│           │  nodeA: 203.0.113.1   │                      │
-│           │  nodeB: 203.0.113.2   │                      │
-│           │  nodeC: 203.0.113.3   │                      │
+│           │  nodeA: {"ip":"…",    │                      │
+│           │    "labels":{…}}      │                      │
+│           │  nodeB: …             │                      │
 │           └───────────┬───────────┘                      │
 │                       │                                  │
 │                       ▼                                  │
@@ -53,11 +53,13 @@ dynamic IPs where you want `*.k8s.example.com` to always resolve to your nodes.
 1. **ip-agent** (DaemonSet, `hostNetwork: true`) runs on every node. Every 5
    minutes it queries multiple public IP services (icanhazip, ifconfig.me, ipify,
    ipecho) over IPv4 and requires a quorum of 2 to agree — guarding against a
-   single service returning garbage. It writes the result to a shared ConfigMap
-   keyed by node name. Each agent's check interval is jittered ±25% to avoid
-   thundering-herd effects on the IP providers and the ConfigMap.
+   single service returning garbage. It writes the discovered IP **and the node's
+   Kubernetes labels** to a shared ConfigMap as JSON, keyed by node name. Each
+   agent's check interval is jittered ±25% to avoid thundering-herd effects on the
+   IP providers and the ConfigMap.
 
 2. **dns-controller** (Deployment, 1 replica) reads the ConfigMap every 30s,
+   optionally filters nodes by label selector (e.g. only control-plane nodes),
    compares the IPs against the current Route53 A records, and applies an UPSERT
    if anything changed. It manages one or more record names (including wildcards).
 
@@ -189,13 +191,32 @@ dig +short '*.k8s.example.com'
 | `NAMESPACE`          | `kube-system` | Namespace of the shared ConfigMap                        |
 | `DNS_TTL`            | `60s`         | TTL for A records                                        |
 | `RECONCILE_INTERVAL` | `30s`         | How often to poll the ConfigMap and reconcile             |
+| `NODE_SELECTOR`      | (none)        | Label selector to filter which nodes' IPs are used (see below) |
+
+#### Node selector examples
+
+| Selector | Effect |
+|----------|--------|
+| `node-role.kubernetes.io/control-plane=` | Only control-plane / API server nodes |
+| `!node-role.kubernetes.io/control-plane` | Only worker nodes (exclude control-plane) |
+| `topology.kubernetes.io/zone=us-east-1a` | Only nodes in a specific zone |
+| `team=backend,env=prod` | Multiple requirements (AND logic) |
+
+Uses standard [Kubernetes label selector syntax](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors).
+When unset, all node IPs are included.
 
 ## Design decisions
 
 - **ConfigMap as database**: Avoids deploying etcd/postgres for what is a tiny
-  amount of data. A 100-node cluster stores ~2KB. If you already run postgres and
-  want durability beyond what the k8s API server provides, swapping out the
-  `store` package is straightforward.
+  amount of data. Each node entry is stored as JSON containing the IP and the
+  node's Kubernetes labels, enabling the controller to filter by role, zone, or
+  any other label without needing direct access to the Kubernetes node API. The
+  store handles legacy plain-IP entries gracefully for backwards compatibility.
+
+- **Node label filtering**: The controller supports standard Kubernetes label
+  selector syntax via `NODE_SELECTOR`. This lets you point DNS only at
+  control-plane nodes, workers, a specific zone, or any combination — without
+  running separate controller instances.
 
 - **hostNetwork: true**: The agent must make outbound HTTP requests from the
   node's actual network stack, not through kube-proxy or a CNI overlay, to get

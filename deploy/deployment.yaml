@@ -32,6 +32,14 @@ spec:
               value: "60s"
             - name: RECONCILE_INTERVAL
               value: "30s"
+            # Optional: only use IPs from nodes matching this label selector.
+            # Uses standard Kubernetes selector syntax.
+            # Examples:
+            #   "node-role.kubernetes.io/control-plane="  — only control-plane nodes
+            #   "topology.kubernetes.io/zone=us-east-1a"  — only nodes in a specific zone
+            #   "!node-role.kubernetes.io/control-plane"  — exclude control-plane nodes
+            # - name: NODE_SELECTOR
+            #   value: "node-role.kubernetes.io/control-plane="
           resources:
             requests:
               cpu: 10m

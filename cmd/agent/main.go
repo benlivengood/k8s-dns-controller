@@ -14,6 +14,7 @@ import (
 	"github.com/yourorg/k8s-dns-controller/pkg/ipcheck"
 	"github.com/yourorg/k8s-dns-controller/pkg/store"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -90,7 +91,7 @@ func main() {
 	case <-time.After(initialJitter):
 	}
 
-	run(ctx, logger, s, providers, quorum, nodeName)
+	run(ctx, logger, clientset, s, providers, quorum, nodeName)
 
 	for {
 		// ±25% jitter around the configured interval to avoid thundering herd.
@@ -102,15 +103,14 @@ func main() {
 			logger.Info("shutting down")
 			return
 		case <-time.After(sleep):
-			run(ctx, logger, s, providers, quorum, nodeName)
+			run(ctx, logger, clientset, s, providers, quorum, nodeName)
 		}
 	}
 }
 
-func run(ctx context.Context, logger *slog.Logger, s *store.Store, providers []ipcheck.Provider, quorum int, nodeName string) {
+func run(ctx context.Context, logger *slog.Logger, clientset kubernetes.Interface, s *store.Store, providers []ipcheck.Provider, quorum int, nodeName string) {
 	ip, err := ipcheck.Discover(ctx, providers, quorum)
 	if err != nil {
-		// Discover returns best-effort IP even on quorum failure.
 		logger.Warn("ip discovery issue", "error", err)
 	}
 	if ip == nil {
@@ -118,9 +118,15 @@ func run(ctx context.Context, logger *slog.Logger, s *store.Store, providers []i
 		return
 	}
 
+	node, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	if err != nil {
+		logger.Error("failed to get node labels", "error", err)
+		return
+	}
+
 	logger.Info("discovered public IP", "node", nodeName, "ip", ip.String())
 
-	if err := s.SetNodeIP(ctx, nodeName, ip); err != nil {
-		logger.Error("failed to store IP", "error", err)
+	if err := s.SetNode(ctx, nodeName, ip, node.Labels); err != nil {
+		logger.Error("failed to store node entry", "error", err)
 	}
 }

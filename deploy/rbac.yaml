@@ -33,3 +33,25 @@ roleRef:
   kind: Role
   name: k8s-dns-controller
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-dns-controller
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-dns-controller
+subjects:
+  - kind: ServiceAccount
+    name: k8s-dns-controller
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: k8s-dns-controller
+  apiGroup: rbac.authorization.k8s.io

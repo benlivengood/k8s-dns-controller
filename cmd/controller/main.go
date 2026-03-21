@@ -15,6 +15,7 @@ import (
 	"github.com/yourorg/k8s-dns-controller/pkg/dns"
 	"github.com/yourorg/k8s-dns-controller/pkg/store"
 
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -28,6 +29,16 @@ func main() {
 	namespace := os.Getenv("NAMESPACE")
 	if namespace == "" {
 		namespace = "kube-system"
+	}
+
+	var nodeSelector labels.Selector
+	if v := os.Getenv("NODE_SELECTOR"); v != "" {
+		var err error
+		nodeSelector, err = labels.Parse(v)
+		if err != nil {
+			logger.Error("invalid NODE_SELECTOR", "value", v, "error", err)
+			os.Exit(1)
+		}
 	}
 
 	ttl := int64(60)
@@ -80,10 +91,11 @@ func main() {
 		"records", recordNames,
 		"ttl", ttl,
 		"interval", interval,
+		"node_selector", nodeSelector,
 	)
 
 	// Reconcile immediately, then on a ticker.
-	reconcile(ctx, logger, s, reconciler)
+	reconcile(ctx, logger, s, reconciler, nodeSelector)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -94,13 +106,13 @@ func main() {
 			logger.Info("shutting down")
 			return
 		case <-ticker.C:
-			reconcile(ctx, logger, s, reconciler)
+			reconcile(ctx, logger, s, reconciler, nodeSelector)
 		}
 	}
 }
 
-func reconcile(ctx context.Context, logger *slog.Logger, s *store.Store, r *dns.Reconciler) {
-	ips, err := s.GetAllIPs(ctx)
+func reconcile(ctx context.Context, logger *slog.Logger, s *store.Store, r *dns.Reconciler, sel labels.Selector) {
+	ips, err := s.GetFilteredIPs(ctx, sel)
 	if err != nil {
 		logger.Error("reading IP store", "error", err)
 		return
