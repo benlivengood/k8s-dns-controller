@@ -197,7 +197,7 @@ dig +short '*.k8s.example.com'
 
 | Selector | Effect |
 |----------|--------|
-| `node-role.kubernetes.io/control-plane=` | Only control-plane / API server nodes |
+| `node-role.kubernetes.io/control-plane` | Only control-plane / API server nodes |
 | `!node-role.kubernetes.io/control-plane` | Only worker nodes (exclude control-plane) |
 | `topology.kubernetes.io/zone=us-east-1a` | Only nodes in a specific zone |
 | `team=backend,env=prod` | Multiple requirements (AND logic) |
