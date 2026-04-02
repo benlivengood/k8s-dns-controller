@@ -14,7 +14,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
-    resourceNames: ["node-public-ips"]
+    resourceNames: ["node-public-ips", "node-health-probes"]
     verbs: ["get", "update"]
   - apiGroups: [""]
     resources: ["configmaps"]

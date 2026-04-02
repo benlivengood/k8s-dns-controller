@@ -63,6 +63,13 @@ dynamic IPs where you want `*.k8s.example.com` to always resolve to your nodes.
    compares the IPs against the current Route53 A records, and applies an UPSERT
    if anything changed. It manages one or more record names (including wildcards).
 
+3. **health-prober** (optional DaemonSet, one pod per topology zone) reads the
+   node IPs from the ConfigMap and TLS-dials each one on port 443. Each zone's
+   prober writes its results (last-success timestamps) to a second ConfigMap
+   (`node-health-probes`). The controller can use these results to only include
+   IPs that are reachable from a configurable fraction of zones — forming a
+   distributed health-checked load balancer.
+
 Stale entries in the ConfigMap (e.g. from decommissioned nodes) should be removed
 manually with `kubectl`. The agent intentionally does **not** remove its entry on
 shutdown to avoid DNS churn during rolling updates or brief restarts.
@@ -76,6 +83,8 @@ shutdown to avoid DNS churn during rolling updates or brief restarts.
 docker build --target agent -t YOUR_REGISTRY/k8s-dns-controller-agent:latest .
 # Controller
 docker build --target controller -t YOUR_REGISTRY/k8s-dns-controller-controller:latest .
+# Health prober (optional)
+docker build --target prober -t YOUR_REGISTRY/k8s-dns-controller-prober:latest .
 ```
 
 ### 2. Configure AWS credentials
@@ -153,6 +162,8 @@ Edit the `CHANGEME` values in the manifests, then:
 kubectl apply -f deploy/rbac.yaml
 kubectl apply -f deploy/daemonset.yaml
 kubectl apply -f deploy/deployment.yaml
+# Optional: deploy health probers for distributed reachability checks
+kubectl apply -f deploy/prober-daemonset.yaml
 ```
 
 ### 4. Verify
@@ -192,6 +203,8 @@ dig +short '*.k8s.example.com'
 | `DNS_TTL`            | `60s`         | TTL for A records                                        |
 | `RECONCILE_INTERVAL` | `30s`         | How often to poll the ConfigMap and reconcile             |
 | `NODE_SELECTOR`      | (none)        | Label selector to filter which nodes' IPs are used (see below) |
+| `HEALTH_MAX_AGE`     | (none)        | Max age of a health probe timestamp to count as fresh (e.g. `5m`). Enables health filtering when set. |
+| `HEALTH_THRESHOLD`   | `0.5`         | Fraction of zones that must report a fresh probe for an IP to be included |
 
 #### Node selector examples
 
@@ -204,6 +217,33 @@ dig +short '*.k8s.example.com'
 
 Uses standard [Kubernetes label selector syntax](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors).
 When unset, all node IPs are included.
+
+### health-prober (optional DaemonSet)
+
+| Env var          | Default       | Description                                        |
+|------------------|---------------|----------------------------------------------------|
+| `NODE_NAME`      | *required*    | Set via downward API (`spec.nodeName`)              |
+| `NAMESPACE`      | `kube-system` | Namespace of the shared ConfigMaps                  |
+| `PROBE_INTERVAL` | `30s`         | How often to probe all IPs (jittered ±25%)         |
+| `PROBE_PORT`     | `443`         | TCP port to TLS-dial                                |
+| `PROBE_TIMEOUT`  | `5s`          | Timeout per TLS handshake                           |
+
+The prober reads its zone from the node's `topology.kubernetes.io/zone` label.
+Nodes without this label will not run a prober. Pod anti-affinity ensures at
+most one prober per zone.
+
+#### Health filtering
+
+When `HEALTH_MAX_AGE` is set on the controller, it reads the
+`node-health-probes` ConfigMap alongside the normal `node-public-ips` one.
+Each zone's prober writes a JSON object mapping node names to their
+last-successful-probe timestamp (RFC 3339). Failed probes leave the timestamp
+untouched, so it ages out naturally.
+
+An IP is included in DNS only if the fraction of zones with a fresh timestamp
+(within `HEALTH_MAX_AGE`) meets or exceeds `HEALTH_THRESHOLD`. If no health
+data exists at all (probers not deployed, or ConfigMap empty), all IPs pass
+through — health checking is purely additive.
 
 ## Design decisions
 
@@ -238,3 +278,11 @@ When unset, all node IPs are included.
   it stops. This avoids unnecessary DNS churn during rolling updates or brief
   restarts. Stale entries from permanently removed nodes should be cleaned up
   manually.
+
+- **Distributed health probing**: The optional prober DaemonSet uses zone-level
+  pod anti-affinity to place one prober per `topology.kubernetes.io/zone`. Each
+  prober independently TLS-dials every node IP. Results are stored as
+  last-success timestamps rather than booleans — a failed probe simply leaves
+  the timestamp to age out, which naturally handles transient failures without
+  flapping. The controller's threshold-based filter (`HEALTH_MAX_AGE` +
+  `HEALTH_THRESHOLD`) lets you tune how aggressive the health gating is.

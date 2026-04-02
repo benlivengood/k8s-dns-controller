@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: health-prober
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: health-prober
+    app.kubernetes.io/part-of: k8s-dns-controller
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: health-prober
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: health-prober
+    spec:
+      serviceAccountName: k8s-dns-controller
+      affinity:
+        # Only schedule on nodes that have a zone label.
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: Exists
+        # One prober per zone.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: health-prober
+              topologyKey: topology.kubernetes.io/zone
+      containers:
+        - name: prober
+          image: YOUR_REGISTRY/k8s-dns-controller:latest  # CHANGEME
+          command: ["/prober"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NAMESPACE
+              value: "kube-system"
+            - name: PROBE_INTERVAL
+              value: "30s"
+            - name: PROBE_PORT
+              value: "443"
+            - name: PROBE_TIMEOUT
+              value: "5s"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop: ["ALL"]

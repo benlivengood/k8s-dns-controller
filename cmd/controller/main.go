@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -55,6 +56,26 @@ func main() {
 		}
 	}
 
+	var healthMaxAge time.Duration
+	if v := os.Getenv("HEALTH_MAX_AGE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			healthMaxAge = d
+		} else {
+			logger.Error("invalid HEALTH_MAX_AGE", "value", v, "error", err)
+			os.Exit(1)
+		}
+	}
+
+	healthThreshold := 0.5
+	if v := os.Getenv("HEALTH_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			healthThreshold = f
+		} else {
+			logger.Error("invalid HEALTH_THRESHOLD", "value", v, "error", err)
+			os.Exit(1)
+		}
+	}
+
 	// Kubernetes client.
 	k8sConfig, err := rest.InClusterConfig()
 	if err != nil {
@@ -68,6 +89,11 @@ func main() {
 	}
 
 	s := store.New(clientset, namespace)
+
+	var hs *store.HealthStore
+	if healthMaxAge > 0 {
+		hs = store.NewHealthStore(clientset, namespace)
+	}
 
 	// AWS client — uses IRSA, env creds, or instance profile automatically.
 	awsCfg, err := config.LoadDefaultConfig(context.Background())
@@ -92,10 +118,21 @@ func main() {
 		"ttl", ttl,
 		"interval", interval,
 		"node_selector", nodeSelector,
+		"health_max_age", healthMaxAge,
+		"health_threshold", healthThreshold,
 	)
 
+	rc := &reconcileConfig{
+		store:           s,
+		healthStore:     hs,
+		reconciler:      reconciler,
+		nodeSelector:    nodeSelector,
+		healthMaxAge:    healthMaxAge,
+		healthThreshold: healthThreshold,
+	}
+
 	// Reconcile immediately, then on a ticker.
-	reconcile(ctx, logger, s, reconciler, nodeSelector)
+	reconcile(ctx, logger, rc)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -106,13 +143,22 @@ func main() {
 			logger.Info("shutting down")
 			return
 		case <-ticker.C:
-			reconcile(ctx, logger, s, reconciler, nodeSelector)
+			reconcile(ctx, logger, rc)
 		}
 	}
 }
 
-func reconcile(ctx context.Context, logger *slog.Logger, s *store.Store, r *dns.Reconciler, sel labels.Selector) {
-	ips, err := s.GetFilteredIPs(ctx, sel)
+type reconcileConfig struct {
+	store           *store.Store
+	healthStore     *store.HealthStore
+	reconciler      *dns.Reconciler
+	nodeSelector    labels.Selector
+	healthMaxAge    time.Duration
+	healthThreshold float64
+}
+
+func reconcile(ctx context.Context, logger *slog.Logger, rc *reconcileConfig) {
+	ips, err := rc.store.GetFilteredIPs(ctx, rc.nodeSelector)
 	if err != nil {
 		logger.Error("reading IP store", "error", err)
 		return
@@ -120,7 +166,20 @@ func reconcile(ctx context.Context, logger *slog.Logger, s *store.Store, r *dns.
 
 	logger.Info("current node IPs", "count", len(ips))
 
-	changed, err := r.Reconcile(ctx, ips)
+	if rc.healthStore != nil {
+		allHealth, err := rc.healthStore.GetAllHealth(ctx)
+		if err != nil {
+			logger.Error("reading health store", "error", err)
+			return
+		}
+		before := len(ips)
+		ips = store.ApplyHealthFilter(ips, allHealth, rc.healthMaxAge, rc.healthThreshold)
+		if len(ips) != before {
+			logger.Info("health filter applied", "before", before, "after", len(ips))
+		}
+	}
+
+	changed, err := rc.reconciler.Reconcile(ctx, ips)
 	if err != nil {
 		logger.Error("reconciliation failed", "error", err)
 		return
