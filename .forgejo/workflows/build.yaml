@@ -11,8 +11,9 @@ jobs:
     steps:
       - name: Checkout
         run: |
+          SERVER_HOST="${GITHUB_SERVER_URL#*://}"
           git clone --depth 1 --branch "$GITHUB_REF_NAME" \
-            "oauth2:${GITHUB_TOKEN}@$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" .
+            "${GITHUB_SERVER_URL%%://*}://oauth2:${GITHUB_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}.git" .
           git checkout "$GITHUB_SHA"
       - run: go test ./...
 
@@ -25,8 +26,9 @@ jobs:
     steps:
       - name: Checkout
         run: |
+          SERVER_HOST="${GITHUB_SERVER_URL#*://}"
           git clone --depth 1 --branch "$GITHUB_REF_NAME" \
-            "oauth2:${GITHUB_TOKEN}@$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" .
+            "${GITHUB_SERVER_URL%%://*}://oauth2:${GITHUB_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}.git" .
           git checkout "$GITHUB_SHA"
 
       - name: Login to registry
