@@ -1,0 +1,39 @@
+name: Build and Push
+
+on: [push]
+
+env:
+  REGISTRY: registry.benliven.cloud
+
+jobs:
+  test:
+    runs-on: go
+    steps:
+      - uses: actions/checkout@v4
+      - run: go test ./...
+
+  build-and-push:
+    runs-on: go
+    needs: test
+    strategy:
+      matrix:
+        target: [agent, controller, prober]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to registry
+        run: docker login -u "${{ secrets.REGISTRY_USER }}" -p "${{ secrets.REGISTRY_PASSWORD }}" "$REGISTRY"
+
+      - name: Build image
+        run: docker build --target ${{ matrix.target }} -t "$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}" .
+
+      - name: Tag latest
+        if: github.ref == 'refs/heads/main'
+        run: docker tag "$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}" "$REGISTRY/dns-${{ matrix.target }}:latest"
+
+      - name: Push SHA tag
+        run: docker push "$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}"
+
+      - name: Push latest
+        if: github.ref == 'refs/heads/main'
+        run: docker push "$REGISTRY/dns-${{ matrix.target }}:latest"
