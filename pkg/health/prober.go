@@ -9,19 +9,38 @@ import (
 	"time"
 )
 
-// CheckTLS attempts a TLS handshake to ip:port over IPv4, accepting any
-// certificate. Returns true if the handshake completes successfully.
-func CheckTLS(ctx context.Context, ip string, port int, timeout time.Duration) bool {
-	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+// Prober holds configuration for TLS health checks.
+type Prober struct {
+	Port       int
+	Timeout    time.Duration
+	ServerName string      // expected TLS server name (e.g. "*.k8s.example.com")
+	TLSConfig  *tls.Config // optional override; nil uses system trust store
+}
 
-	dialer := &net.Dialer{Timeout: timeout}
+// Check attempts a TLS handshake to ip:port over IPv4 and validates the
+// server certificate chain and server name. Returns true if the handshake
+// and certificate validation succeed.
+func (p *Prober) Check(ctx context.Context, ip string) bool {
+	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", p.Port))
+
+	dialer := &net.Dialer{Timeout: p.Timeout}
 	conn, err := dialer.DialContext(ctx, "tcp4", addr)
 	if err != nil {
 		return false
 	}
 
-	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
-	tlsConn.SetDeadline(time.Now().Add(timeout))
+	var cfg *tls.Config
+	if p.TLSConfig != nil {
+		cfg = p.TLSConfig.Clone()
+	} else {
+		cfg = &tls.Config{}
+	}
+	if p.ServerName != "" && cfg.ServerName == "" {
+		cfg.ServerName = p.ServerName
+	}
+
+	tlsConn := tls.Client(conn, cfg)
+	tlsConn.SetDeadline(time.Now().Add(p.Timeout))
 
 	err = tlsConn.Handshake()
 	tlsConn.Close()
@@ -30,7 +49,7 @@ func CheckTLS(ctx context.Context, ip string, port int, timeout time.Duration) b
 
 // CheckAll probes every IP concurrently and returns which nodes succeeded.
 // The ips map is node-name -> IP-address.
-func CheckAll(ctx context.Context, ips map[string]string, port int, timeout time.Duration) map[string]bool {
+func (p *Prober) CheckAll(ctx context.Context, ips map[string]string) map[string]bool {
 	type result struct {
 		node string
 		ok   bool
@@ -43,7 +62,7 @@ func CheckAll(ctx context.Context, ips map[string]string, port int, timeout time
 		wg.Add(1)
 		go func(node, ip string) {
 			defer wg.Done()
-			results <- result{node: node, ok: CheckTLS(ctx, ip, port, timeout)}
+			results <- result{node: node, ok: p.Check(ctx, ip)}
 		}(node, ip)
 	}
 

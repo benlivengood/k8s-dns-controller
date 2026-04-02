@@ -48,6 +48,8 @@ spec:
               value: "443"
             - name: PROBE_TIMEOUT
               value: "5s"
+            # - name: PROBE_TLS_SERVERNAME
+            #   value: "k8s.example.com"  # expected TLS server name for cert validation
           resources:
             requests:
               cpu: 10m

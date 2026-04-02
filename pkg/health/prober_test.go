@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,24 +13,72 @@ import (
 	"time"
 )
 
-func TestCheckTLS_Success(t *testing.T) {
+func trustedTLSConfig(srv *httptest.Server) *tls.Config {
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	return &tls.Config{RootCAs: pool, ServerName: "example.com"}
+}
+
+func testPort(t *testing.T, srv *httptest.Server) int {
+	t.Helper()
+	_, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+	port, _ := strconv.Atoi(portStr)
+	return port
+}
+
+func TestCheck_ValidCert(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
-	_ = host
-	port, _ := strconv.Atoi(portStr)
+	p := &Prober{
+		Port:      testPort(t, srv),
+		Timeout:   5 * time.Second,
+		TLSConfig: trustedTLSConfig(srv),
+	}
 
-	ok := CheckTLS(context.Background(), "127.0.0.1", port, 5*time.Second)
-	if !ok {
-		t.Error("expected TLS check to succeed against test server")
+	if !p.Check(context.Background(), "127.0.0.1") {
+		t.Error("expected TLS check to succeed with trusted CA and matching server name")
 	}
 }
 
-func TestCheckTLS_Refused(t *testing.T) {
-	// Pick a port that nothing is listening on.
+func TestCheck_UntrustedCert(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	p := &Prober{
+		Port:       testPort(t, srv),
+		Timeout:    5 * time.Second,
+		ServerName: "example.com",
+		TLSConfig:  &tls.Config{RootCAs: x509.NewCertPool()},
+	}
+
+	if p.Check(context.Background(), "127.0.0.1") {
+		t.Error("expected TLS check to fail with untrusted cert")
+	}
+}
+
+func TestCheck_WrongServerName(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+
+	p := &Prober{
+		Port:       testPort(t, srv),
+		Timeout:    5 * time.Second,
+		ServerName: "wrong.invalid",
+		TLSConfig:  &tls.Config{RootCAs: pool},
+	}
+
+	if p.Check(context.Background(), "127.0.0.1") {
+		t.Error("expected TLS check to fail with wrong server name")
+	}
+}
+
+func TestCheck_Refused(t *testing.T) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -37,14 +86,14 @@ func TestCheckTLS_Refused(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 
-	ok := CheckTLS(context.Background(), "127.0.0.1", port, 2*time.Second)
-	if ok {
+	p := &Prober{Port: port, Timeout: 2 * time.Second, ServerName: "example.com"}
+
+	if p.Check(context.Background(), "127.0.0.1") {
 		t.Error("expected TLS check to fail on closed port")
 	}
 }
 
-func TestCheckTLS_PlainTCP(t *testing.T) {
-	// Start a plain TCP listener (no TLS) -- handshake should fail.
+func TestCheck_PlainTCP(t *testing.T) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -62,31 +111,10 @@ func TestCheckTLS_PlainTCP(t *testing.T) {
 		}
 	}()
 
-	ok := CheckTLS(context.Background(), "127.0.0.1", port, 2*time.Second)
-	if ok {
+	p := &Prober{Port: port, Timeout: 2 * time.Second, ServerName: "example.com"}
+
+	if p.Check(context.Background(), "127.0.0.1") {
 		t.Error("expected TLS handshake to fail against plain TCP")
-	}
-}
-
-func TestCheckTLS_SelfSigned(t *testing.T) {
-	// httptest.NewTLSServer uses a self-signed cert. CheckTLS should succeed
-	// because InsecureSkipVerify is true.
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	defer srv.Close()
-
-	_, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
-	port, _ := strconv.Atoi(portStr)
-
-	// Verify the cert IS self-signed (sanity check).
-	conn, err := tls.Dial("tcp", srv.Listener.Addr().String(), &tls.Config{InsecureSkipVerify: false})
-	if err == nil {
-		conn.Close()
-		t.Skip("test cert unexpectedly trusted")
-	}
-
-	ok := CheckTLS(context.Background(), "127.0.0.1", port, 5*time.Second)
-	if !ok {
-		t.Error("expected self-signed TLS to succeed with InsecureSkipVerify")
 	}
 }
 
@@ -94,15 +122,18 @@ func TestCheckAll(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
 
-	_, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
-	port, _ := strconv.Atoi(portStr)
+	p := &Prober{
+		Port:      testPort(t, srv),
+		Timeout:   2 * time.Second,
+		TLSConfig: trustedTLSConfig(srv),
+	}
 
 	ips := map[string]string{
 		"good-node": "127.0.0.1",
-		"bad-node":  "192.0.2.1", // TEST-NET, unreachable
+		"bad-node":  "192.0.2.1",
 	}
 
-	results := CheckAll(context.Background(), ips, port, 2*time.Second)
+	results := p.CheckAll(context.Background(), ips)
 
 	if !results["good-node"] {
 		t.Error("expected good-node to be reachable")

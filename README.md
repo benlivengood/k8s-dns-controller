@@ -227,6 +227,11 @@ When unset, all node IPs are included.
 | `PROBE_INTERVAL` | `30s`         | How often to probe all IPs (jittered ±25%)         |
 | `PROBE_PORT`     | `443`         | TCP port to TLS-dial                                |
 | `PROBE_TIMEOUT`  | `5s`          | Timeout per TLS handshake                           |
+| `PROBE_TLS_SERVERNAME` | *(empty)*  | Expected TLS server name for certificate validation. When empty, the prober connects by IP and validates the cert's IP SANs. Set this when your servers present certs for a hostname (e.g. `k8s.example.com`). |
+
+The prober validates the full TLS certificate chain against the system trust
+store. If your nodes serve certificates for a hostname rather than their IP,
+set `PROBE_TLS_SERVERNAME` so the prober can verify the server name correctly.
 
 The prober reads its zone from the node's `topology.kubernetes.io/zone` label.
 Nodes without this label will not run a prober. Pod anti-affinity ensures at
@@ -281,8 +286,10 @@ through — health checking is purely additive.
 
 - **Distributed health probing**: The optional prober DaemonSet uses zone-level
   pod anti-affinity to place one prober per `topology.kubernetes.io/zone`. Each
-  prober independently TLS-dials every node IP. Results are stored as
-  last-success timestamps rather than booleans — a failed probe simply leaves
-  the timestamp to age out, which naturally handles transient failures without
-  flapping. The controller's threshold-based filter (`HEALTH_MAX_AGE` +
-  `HEALTH_THRESHOLD`) lets you tune how aggressive the health gating is.
+  prober independently TLS-dials every node IP, validating the full certificate
+  chain against the system trust store (`PROBE_TLS_SERVERNAME` controls the
+  expected server name). Results are stored as last-success timestamps rather
+  than booleans — a failed probe simply leaves the timestamp to age out, which
+  naturally handles transient failures without flapping. The controller's
+  threshold-based filter (`HEALTH_MAX_AGE` + `HEALTH_THRESHOLD`) lets you tune
+  how aggressive the health gating is.

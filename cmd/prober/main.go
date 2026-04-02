@@ -55,6 +55,8 @@ func main() {
 		}
 	}
 
+	serverName := os.Getenv("PROBE_TLS_SERVERNAME")
+
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		logger.Error("building k8s config", "error", err)
@@ -83,6 +85,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
+	prober := &health.Prober{Port: port, Timeout: timeout, ServerName: serverName}
+
 	logger.Info("prober starting",
 		"node", nodeName,
 		"zone", zone,
@@ -91,7 +95,7 @@ func main() {
 		"timeout", timeout,
 	)
 
-	probe(ctx, logger, ipStore, healthStore, zone, port, timeout)
+	runProbe(ctx, logger, ipStore, healthStore, prober, zone)
 
 	for {
 		jitter := interval / 4
@@ -102,12 +106,12 @@ func main() {
 			logger.Info("shutting down")
 			return
 		case <-time.After(sleep):
-			probe(ctx, logger, ipStore, healthStore, zone, port, timeout)
+			runProbe(ctx, logger, ipStore, healthStore, prober, zone)
 		}
 	}
 }
 
-func probe(ctx context.Context, logger *slog.Logger, ipStore *store.Store, healthStore *store.HealthStore, zone string, port int, timeout time.Duration) {
+func runProbe(ctx context.Context, logger *slog.Logger, ipStore *store.Store, healthStore *store.HealthStore, prober *health.Prober, zone string) {
 	nodes, err := ipStore.GetNodes(ctx)
 	if err != nil {
 		logger.Error("reading node IPs", "error", err)
@@ -124,7 +128,7 @@ func probe(ctx context.Context, logger *slog.Logger, ipStore *store.Store, healt
 		return
 	}
 
-	results := health.CheckAll(ctx, ips, port, timeout)
+	results := prober.CheckAll(ctx, ips)
 
 	healthy := 0
 	for _, ok := range results {
