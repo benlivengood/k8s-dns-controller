@@ -31,19 +31,20 @@ jobs:
             "${GITHUB_SERVER_URL%%://*}://oauth2:${GITHUB_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}.git" .
           git checkout "$GITHUB_SHA"
 
-      - name: Login to registry
-        run: docker login -u "${{ secrets.REGISTRY_USER }}" -p "${{ secrets.REGISTRY_PASSWORD }}" "$REGISTRY"
+      - name: Build and push
+        run: |
+          # Set up registry credentials
+          mkdir -p /kaniko/.docker
+          echo '{"auths":{"'"$REGISTRY"'":{"username":"${{ secrets.REGISTRY_USER }}","password":"${{ secrets.REGISTRY_PASSWORD }}"}}}' \
+            > /kaniko/.docker/config.json
 
-      - name: Build image
-        run: docker build --target ${{ matrix.target }} -t "$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}" .
+          DESTINATIONS="--destination $REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}"
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            DESTINATIONS="$DESTINATIONS --destination $REGISTRY/dns-${{ matrix.target }}:latest"
+          fi
 
-      - name: Tag latest
-        if: github.ref == 'refs/heads/main'
-        run: docker tag "$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}" "$REGISTRY/dns-${{ matrix.target }}:latest"
-
-      - name: Push SHA tag
-        run: docker push "$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}"
-
-      - name: Push latest
-        if: github.ref == 'refs/heads/main'
-        run: docker push "$REGISTRY/dns-${{ matrix.target }}:latest"
+          executor \
+            --dockerfile Dockerfile \
+            --context . \
+            --target ${{ matrix.target }} \
+            $DESTINATIONS
