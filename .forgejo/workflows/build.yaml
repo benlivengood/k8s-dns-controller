@@ -1,9 +1,13 @@
 name: Build and Push
 
-on: [push]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 env:
   REGISTRY: registry.benliven.cloud
+  KANIKO_NS: forgejo-runner
 
 jobs:
   test:
@@ -15,55 +19,82 @@ jobs:
           git clone --depth 1 --branch "$GITHUB_REF_NAME" \
             "${GITHUB_SERVER_URL%%://*}://oauth2:${GITHUB_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}.git" .
           git checkout "$GITHUB_SHA"
-      - run: go test ./...
+      - name: Test
+        run: |
+          export GOPATH=/data/.cache/gopath
+          export GOCACHE=/data/.cache/gobuild
+          go test ./...
 
   build-and-push:
     runs-on: go
     needs: test
+    if: github.event_name == 'push'
     strategy:
       matrix:
         target: [agent, controller, prober]
     steps:
-      - name: Checkout
+      - name: Build and push with Kaniko
         run: |
-          SERVER_HOST="${GITHUB_SERVER_URL#*://}"
-          git clone --depth 1 --branch "$GITHUB_REF_NAME" \
-            "${GITHUB_SERVER_URL%%://*}://oauth2:${GITHUB_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}.git" .
-          git checkout "$GITHUB_SHA"
+          POD_NAME="kaniko-${{ matrix.target }}-${GITHUB_RUN_ID}"
 
-      - name: Login to registry
-        run: |
-          buildah login \
-            -u "${{ secrets.REGISTRY_USER }}" \
-            -p "${{ secrets.REGISTRY_PASSWORD }}" \
-            "$REGISTRY"
+          # Build destination flags
+          DEST="--destination=$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}"
+          DEST_LATEST=""
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            DEST_LATEST="--destination=$REGISTRY/dns-${{ matrix.target }}:latest"
+          fi
 
-      - name: Build image
-        run: |
-          buildah bud \
-            --storage-driver vfs \
-            --target ${{ matrix.target }} \
-            -t "$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}" .
+          # Spawn Kaniko pod in forgejo-runner namespace
+          cat <<EOFPOD | kubectl apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: ${POD_NAME}
+            namespace: ${KANIKO_NS}
+          spec:
+            restartPolicy: Never
+            imagePullSecrets:
+              - name: regcred
+            containers:
+              - name: kaniko
+                image: registry.benliven.cloud/kaniko:latest
+                args:
+                  - --dockerfile=Dockerfile
+                  - --context=git://forgejo-http.forgejo.svc:3000/${GITHUB_REPOSITORY}.git#refs/heads/${GITHUB_REF_NAME}
+                  - --target=${{ matrix.target }}
+                  - ${DEST}
+                  - ${DEST_LATEST}
+                env:
+                  - name: GIT_TOKEN
+                    value: "${GITHUB_TOKEN}"
+                volumeMounts:
+                  - name: docker-config
+                    mountPath: /kaniko/.docker
+            volumes:
+              - name: docker-config
+                secret:
+                  secretName: pushcred
+                  items:
+                    - key: .dockerconfigjson
+                      path: config.json
+          EOFPOD
 
-      - name: Tag latest
-        if: github.ref == 'refs/heads/main'
-        run: |
-          buildah tag \
-            --storage-driver vfs \
-            "$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}" \
-            "$REGISTRY/dns-${{ matrix.target }}:latest"
+          # Stream logs once container starts
+          echo "Waiting for Kaniko pod..."
+          kubectl wait pod/${POD_NAME} -n ${KANIKO_NS} \
+            --for=condition=Ready --timeout=120s 2>/dev/null || true
+          kubectl logs -f pod/${POD_NAME} -n ${KANIKO_NS} 2>/dev/null || true
 
-      - name: Push SHA tag
-        run: |
-          buildah push \
-            --storage-driver vfs \
-            --creds "${{ secrets.REGISTRY_USER }}:${{ secrets.REGISTRY_PASSWORD }}" \
-            "$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}"
+          # Check final status
+          kubectl wait pod/${POD_NAME} -n ${KANIKO_NS} \
+            --for=jsonpath='{.status.phase}'=Succeeded \
+            --timeout=600s
+          EXIT=$?
 
-      - name: Push latest
-        if: github.ref == 'refs/heads/main'
-        run: |
-          buildah push \
-            --storage-driver vfs \
-            --creds "${{ secrets.REGISTRY_USER }}:${{ secrets.REGISTRY_PASSWORD }}" \
-            "$REGISTRY/dns-${{ matrix.target }}:latest"
+          # Cleanup
+          kubectl delete pod ${POD_NAME} -n ${KANIKO_NS} --ignore-not-found
+
+          if [ $EXIT -ne 0 ]; then
+            echo "Kaniko build failed"
+            exit 1
+          fi
