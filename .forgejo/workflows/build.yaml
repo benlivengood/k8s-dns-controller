@@ -67,15 +67,11 @@ jobs:
                     value: "${GITHUB_TOKEN}"
                 volumeMounts:
                   - name: docker-config
-                    mountPath: /kaniko/.docker/config.json
-                    subPath: config.json
+                    mountPath: /kaniko/.docker
             volumes:
               - name: docker-config
                 secret:
                   secretName: pushcred
-                  items:
-                    - key: .dockerconfigjson
-                      path: config.json
           EOFPOD
 
           # Stream logs once container starts
