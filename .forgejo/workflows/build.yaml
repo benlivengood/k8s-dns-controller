@@ -26,6 +26,7 @@ jobs:
   build-and-push:
     runs-on: go
     needs: test
+    if: github.event_name == 'push'
     strategy:
       matrix:
         target: [agent, controller, prober]
@@ -54,7 +55,7 @@ jobs:
               - name: regcred
             containers:
               - name: kaniko
-                image: registry.benliven.cloud/kaniko:latest
+                image: registry.benliven.cloud/kaniko:slim-1.25.12
                 args:
                   - --dockerfile=Dockerfile
                   - --context=git://forgejo-http.forgejo.svc:3000/${GITHUB_REPOSITORY}.git#refs/heads/${GITHUB_REF_NAME}
