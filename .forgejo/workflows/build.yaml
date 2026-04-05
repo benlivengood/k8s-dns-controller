@@ -55,15 +55,21 @@ jobs:
               - name: regcred
             containers:
               - name: kaniko
-                image: registry.benliven.cloud/kaniko:slim-1.25.12
+                image: registry.benliven.cloud/kaniko:debug
+                command: ["/busybox/sh", "-c"]
                 args:
-                  - --dockerfile=Dockerfile
-                  - --context=git://forge.benliven.cloud/${GITHUB_REPOSITORY}.git#refs/heads/${GITHUB_REF_NAME}
-                  - --target=${{ matrix.target }}
-                  - --verbosity=trace
-                  - ${DEST}
-                  - ${DEST_LATEST}
+                  - |
+                    echo "=== /kaniko/.docker contents ==="
+                    ls -la /kaniko/.docker/ 2>&1 || echo "DIR NOT FOUND"
+                    echo "=== config.json ==="
+                    cat /kaniko/.docker/config.json 2>&1 | sed 's/"auth":"[^"]*"/"auth":"REDACTED"/;s/"password":"[^"]*"/"password":"REDACTED"/' || echo "FILE NOT FOUND"
+                    echo "=== DOCKER_CONFIG ==="
+                    echo "$DOCKER_CONFIG"
+                    echo "=== Running executor ==="
+                    /kaniko/executor --dockerfile=Dockerfile --context=git://forge.benliven.cloud/${GITHUB_REPOSITORY}.git#refs/heads/${GITHUB_REF_NAME} --target=${{ matrix.target }} --verbosity=trace ${DEST} ${DEST_LATEST}
                 env:
+                  - name: DOCKER_CONFIG
+                    value: "/kaniko/.docker"
                   - name: GIT_TOKEN
                     value: "${GITHUB_TOKEN}"
                 volumeMounts:
