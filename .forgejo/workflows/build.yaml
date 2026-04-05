@@ -55,18 +55,13 @@ jobs:
               - name: regcred
             containers:
               - name: kaniko
-                image: registry.benliven.cloud/kaniko:debug
-                command: ["/busybox/sh", "-c"]
+                image: registry.benliven.cloud/kaniko:slim-1.25.12
                 args:
-                  - |
-                    echo "=== /kaniko/.docker contents ==="
-                    ls -la /kaniko/.docker/ 2>&1 || echo "DIR NOT FOUND"
-                    echo "=== config.json ==="
-                    cat /kaniko/.docker/config.json 2>&1 | sed 's/"auth":"[^"]*"/"auth":"REDACTED"/;s/"password":"[^"]*"/"password":"REDACTED"/' || echo "FILE NOT FOUND"
-                    echo "=== DOCKER_CONFIG ==="
-                    echo "$DOCKER_CONFIG"
-                    echo "=== Running executor ==="
-                    /kaniko/executor --dockerfile=Dockerfile --context=git://forge.benliven.cloud/${GITHUB_REPOSITORY}.git#refs/heads/${GITHUB_REF_NAME} --target=${{ matrix.target }} --verbosity=trace ${DEST} ${DEST_LATEST}
+                  - --dockerfile=Dockerfile
+                  - --context=git://forge.benliven.cloud/${GITHUB_REPOSITORY}.git#refs/heads/${GITHUB_REF_NAME}
+                  - --target=${{ matrix.target }}
+                  - ${DEST}
+                  - ${DEST_LATEST}
                 env:
                   - name: DOCKER_CONFIG
                     value: "/kaniko/.docker"
@@ -83,17 +78,6 @@ jobs:
                     - key: .dockerconfigjson
                       path: config.json
           EOFPOD
-
-          # Debug: check pod spec and volume mount status
-          echo "=== Pod volume mounts ==="
-          kubectl get pod ${POD_NAME} -n ${KANIKO_NS} -o jsonpath='{.spec.containers[0].volumeMounts}' 2>/dev/null | python3 -m json.tool 2>/dev/null || true
-          echo ""
-          echo "=== Pod volumes ==="
-          kubectl get pod ${POD_NAME} -n ${KANIKO_NS} -o jsonpath='{.spec.volumes}' 2>/dev/null | python3 -m json.tool 2>/dev/null || true
-          echo ""
-          echo "=== Pod events ==="
-          kubectl describe pod ${POD_NAME} -n ${KANIKO_NS} 2>/dev/null | grep -A 20 "Events:" || true
-          echo ""
 
           # Stream logs once container starts
           echo "Waiting for Kaniko pod..."
