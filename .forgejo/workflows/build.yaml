@@ -42,20 +42,6 @@ jobs:
             DEST_LATEST="--destination=$REGISTRY/dns-${{ matrix.target }}:latest"
           fi
 
-          # Debug: inspect the pushcred secret
-          echo "=== Secret type and keys ==="
-          kubectl get secret pushcred -n ${KANIKO_NS} -o jsonpath='type={.type} keys={.data}' | sed 's/"[A-Za-z0-9+/=]*"/"<REDACTED>"/g'
-          echo ""
-          echo "=== Decoded config structure (values redacted) ==="
-          kubectl get secret pushcred -n ${KANIKO_NS} -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d | python3 -c "
-          import sys,json
-          d=json.load(sys.stdin)
-          for k,v in d.get('auths',{}).items():
-            print(f'  registry: {k}')
-            print(f'  fields: {list(v.keys())}')
-          " 2>/dev/null || echo "  (could not parse as JSON)"
-          echo ""
-
           # Spawn Kaniko pod in forgejo-runner namespace
           cat <<EOFPOD | kubectl apply -f -
           apiVersion: v1
