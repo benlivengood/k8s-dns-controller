@@ -1,9 +1,6 @@
 name: Build and Push
 
-on:
-  push:
-    branches: [main]
-  pull_request:
+on: [push]
 
 env:
   REGISTRY: registry.benliven.cloud
@@ -29,7 +26,6 @@ jobs:
   build-and-push:
     runs-on: go
     needs: test
-    if: github.event_name == 'push'
     strategy:
       matrix:
         target: [agent, controller, prober]
