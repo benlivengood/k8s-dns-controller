@@ -15,8 +15,9 @@ jobs:
     steps:
       - name: Checkout
         run: |
+          REF="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
           SERVER_HOST="${GITHUB_SERVER_URL#*://}"
-          git clone --depth 1 --branch "$GITHUB_REF_NAME" \
+          git clone --depth 1 --branch "$REF" \
             "${GITHUB_SERVER_URL%%://*}://oauth2:${GITHUB_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}.git" .
           git checkout "$GITHUB_SHA"
       - name: Test
