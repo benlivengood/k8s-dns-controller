@@ -67,7 +67,8 @@ jobs:
                     value: "${GITHUB_TOKEN}"
                 volumeMounts:
                   - name: docker-config
-                    mountPath: /kaniko/.docker
+                    mountPath: /kaniko/.docker/config.json
+                    subPath: config.json
             volumes:
               - name: docker-config
                 secret:
