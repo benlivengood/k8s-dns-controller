@@ -58,7 +58,7 @@ jobs:
                 image: registry.benliven.cloud/kaniko:slim-1.25.12
                 args:
                   - --dockerfile=Dockerfile
-                  - --context=git://http://forgejo-http.forgejo.svc:3000/${GITHUB_REPOSITORY}.git#refs/heads/${GITHUB_REF_NAME}
+                  - --context=git://forge.benliven.cloud/${GITHUB_REPOSITORY}.git#refs/heads/${GITHUB_REF_NAME}
                   - --target=${{ matrix.target }}
                   - ${DEST}
                   - ${DEST_LATEST}
