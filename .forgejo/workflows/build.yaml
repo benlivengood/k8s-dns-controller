@@ -12,9 +12,8 @@ jobs:
     steps:
       - name: Checkout
         run: |
-          REF="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
           SERVER_HOST="${GITHUB_SERVER_URL#*://}"
-          git clone --depth 1 --branch "$REF" \
+          git clone --depth 1 --branch "$GITHUB_REF_NAME" \
             "${GITHUB_SERVER_URL%%://*}://oauth2:${GITHUB_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}.git" .
           git checkout "$GITHUB_SHA"
       - name: Test
@@ -26,14 +25,13 @@ jobs:
   build-and-push:
     runs-on: go
     needs: test
-    if: github.event_name == 'push'
     strategy:
       matrix:
         target: [agent, controller, prober]
     steps:
       - name: Build and push with Kaniko
         run: |
-          POD_NAME="kaniko-${{ matrix.target }}-${GITHUB_RUN_ID}"
+          POD_NAME="kaniko-${{ matrix.target }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
 
           # Build destination flags
           DEST="--destination=$REGISTRY/dns-${{ matrix.target }}:${{ github.sha }}"
