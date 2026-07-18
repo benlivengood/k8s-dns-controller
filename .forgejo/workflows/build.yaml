@@ -3,7 +3,7 @@ name: Build and Push
 on: [push]
 
 env:
-  REGISTRY: registrypush.benliven.cloud
+  REGISTRY: registry.benliven.cloud
   KANIKO_NS: forgejo-runner
 
 jobs:
